@@ -185,7 +185,7 @@ To evaluate quantification accuracy, additional experimental data containing spi
 Based on these independent criteria shown above, EVALFQ enabled the performance assessment of LFQ chain from multiple (five) perspectives. Particularly, the performances of 3,128 potential LFQ chains can first be independently ranked using each criterion. Then, an overall ranking of a studied LFQ chain was defined by the sum of multiple (≤5) rankings under multiple criteria (the smaller the sum is, the higher an LFQ chain ranks).<br>
 
 ## Installation 
-[![](https://img.shields.io/badge/source%20package-EVALFQ--0.1.0.tar.gz-orange.svg)](https://github.com/idrblab/EVALFQ/archive/refs/tags/EVALFQ.0.1.0.tar.gz)
+[![](https://img.shields.io/badge/source%20package-EVALFQ--0.1.0.tar.gz-orange.svg)](https://github.com/idrblab/EVALFQ/releases/download/EVALFQ.0.1.0/EVALFQ.0.1.0.tar.gz)
 
 ```R
 # To install the package, type this command in R:
