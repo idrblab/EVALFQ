@@ -207,7 +207,7 @@ BiocManager::install("affy")
 devtools::install_github("cran/metabolomics")
 
 # Or download the source package of EVALFQ_0.1.0.tar.gz and install it
-install.packages("EVALFQ_0.1.0.tar.gz", repos = NULL, type = "source", INSTALL_opts = "--no-multiarch")
+install.packages("EVALFQ.0.1.0.tar.gz", repos = NULL, type = "source", INSTALL_opts = "--no-multiarch")
 ```
 
 ## Usage
