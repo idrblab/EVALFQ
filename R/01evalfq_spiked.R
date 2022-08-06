@@ -1,0 +1,1062 @@
+#' @title Conduct LFQ and assess performance by collectively considering the spiked proteins.
+#' @description The EVALFQ enables the label-free quantification of proteomic
+#' data and the performance assessment of each LFQ workflow from multiple perspectives.  Moreover, it
+#' provides the unique function of ranking all possible LFQ workflows (>3,000 random combinations of
+#' transformation, normalization and imputation methods) based on their performances.
+#' All in all, this tool makes the performance assessment of whole LFQ workflow possible
+#' (collectively assessed by five well-established criteria with distinct underlying theories) and
+#' gives the ranking results of all possible workflows based on the criteria preferred and selected by the users.
+#' For function definitions and descriptions please use "??EVALFQ" command in R.
+#' @param data_s This input file should be numeric type except the first and second column containing the names and label (control or case) of the studied samples, respectively. The intensity data should be provided in this input file with the following order: samples in row and proteins/peptides in column. Missing value (NA) of protein intensity are allowed.
+#' @param spiked The file should provide the concentrations of known proteins (such as spiked proteins). This file is required, if the user want to conduct assessment using criteria (e) This file should contain the class of samples and the Sample ID. The Sample ID should be unique and defined by the preference of EVALFQ users, and the class of samples refers to the group of Sample ID. The ID of the spiked proteins should be consistent in both “data_s" and "spiked”. Detail information are described in the online "Example".
+#' @param assum_a all proteins were assumed to be equally important.The authors will be asked to input a letter “Y” to indicate the corresponding assumption is held for the studied dataset and a letter “N” to denote the opposite.
+#' @param assum_b The level of protein abundance was assumed to be constant among all samples. The authors will be asked to input a letter “Y” to indicate the corresponding assumption is held for the studied dataset and a letter “N” to denote the opposite.
+#' @param assum_c The intensities of the vast majority of the proteins were assumed to be unchanged under the studied conditions. The authors will be asked to input a letter “Y” to indicate the corresponding assumption is held for the studied dataset and a letter “N” to denote the opposite.
+#' @param Ca Criterion (a): precision of LFQ based on the proteomes among replicates (Proteomics. 15:3140-51, 2015). If set 1, the user chooses to assess LFQ workflows using Criterion (a). If set 0, the user excludes Criterion (a) from performance assessment. The default setting of this value is “1”.
+#' @param Cb Criterion (b): classification ability of LFQ between distinct sample groups (Nat Biotechnol. 28:83-9, 2010). If set 1, the user chooses to assess LFQ workflows using Criterion (b). If set 0, the user excludes Criterion (b) from performance assessment. The default setting of this value is “1”.
+#' @param Cc Criterion (c): differential expression analysis by reproducibility-optimization (Nat Biotechnol. 32:896-902, 2014). If set 1, the user chooses to assess LFQ workflows using Criterion (c). If set 0, the user excludes Criterion (c) from performance assessment. The default setting of this value is “1”.
+#' @param Cd Criterion (d): reproducibility of the identified protein markers among different datasets (Mol Biosyst. 11:1235-40, 2015). If set 1, the user chooses to assess LFQ workflows using Criterion (d). If set 0, the user excludes Criterion (d) from performance assessment. The default setting of this value is “1”.
+#' @param Ce Criterion (e): accuracy of LFQ based on spiked and background proteins (Nat Biotechnol. 34:1130-6, 2016). If set 1, the user chooses to assess LFQ workflows using Criterion (e). If set 0, the user excludes Criterion (e) from performance assessment. The default setting of this value is “1”.
+#' @return preprocessed spiked matrix
+#' @import utils stats
+#' @import metabolomics
+#' @import affy vsn
+#' @import MASS limma
+#' @import ProteoMM ROTS
+#' @importFrom grDevices colorRampPalette dev.off pdf
+#' @useDynLib EVALFQ
+#' @importFrom Rcpp sourceCpp
+#' @rawNamespace import(dplyr, except=c(filter,lag,select,combine))
+#' @rawNamespace import(gplots, except=lowess)
+#' @importFrom pcaMethods pca
+#' @importFrom pcaMethods completeObs
+#' @import impute
+#' @usage lfqspikedall1(data_s, spiked, assum_a="Y", assum_b="Y",
+#' assum_c="Y", Ca="1", Cb="1", Cc="1", Cd="1", Ce="1")
+#' @export lfqspikedall1
+#' @examples
+#' library(EVALFQ)
+#' \donttest{data_s <- read.csv(file = "ANPELA-Spiked.INPUT.txt",
+#' sep="\t",header = TRUE,stringsAsFactors = FALSE)}
+#' \donttest{lfqspikedall1(data_s = data_s, spiked = "ANPELA-Spiked.Protein.txt",
+#' assum_a="Y", assum_b="Y", assum_c="Y", Ca="1", Cb="1", Cc="1", Cd="1", Ce="1")}
+
+lfqspikedall1 <- function(data_s, spiked, assum_a="Y", assum_b="Y", assum_c="Y", Ca="1", Cb="1", Cc="1", Cd="1", Ce="1"){
+
+  cat("\n")
+  cat("EVALFQ is Running ...","\n")
+  cat("\n")
+
+  cat("*************************************************************************","\n")
+  cat("Depending on the size of your input dataset","\n")
+  cat("Several mintues or hours may be needed for this assessment","\n")
+  cat("*************************************************************************","\n")
+  cat("\n")
+
+  cat("STEP 1: Prepare input file in standard formats of EVALFQ", "\n")
+  cat("\n")
+  cat("STEP 2: The assumption(s) held as indicated by users","\n")
+  cat("Assumption A: all proteins were equally important (Y/N): ", assum_a, "\n")
+  cat("Assumption B: the level of protein abundance was constant among all samples (Y/N): ", assum_b, "\n")
+  cat("Assumption C: the intensity of the majority of proteins were unchanged (Y/N): ", assum_c, "\n")
+
+  cat("\n")
+  cat("STEP 3: The criteira selected by users for this assessment","\n")
+  cat("Criterion A: Precision (1/0): ", Ca, "\n")
+  cat("Criterion B: Classification Ability (1/0): ", Cb, "\n")
+  cat("Criterion C: Differential Expression (1/0): ", Cc, "\n")
+  cat("Criterion D: Reproducibility (1/0): ", Cd, "\n")
+  cat("Criterion E: Accuracy (1/0): ", Ce, "\n")
+  cat("\n")
+
+  cat("EVALFQ is Running ...","\n")
+  cat("\n")
+
+  Log2Transform<-function (inputdata,  saveoutput = FALSE, outputname = "log.results")
+  {
+    Group <- inputdata[, 1]
+    prelog_data <- inputdata[, -1]
+    log_data <- log2(prelog_data)
+    outdata <- cbind(Group, log_data)
+    if (saveoutput) {
+      write.csv(output, paste(c(outputname, ".csv"), collapse = ""))
+    }
+    output <- list()
+    output$output <- outdata
+    output$groups <- Group
+    output$samples <- row.names(inputdata)
+    return(structure(output, class = "metabdata"))
+  }
+  #### 样本在行，特征在列
+  trans <- function(data,n){
+    matrix <- switch(
+      n,
+      Box_Cox(data),
+      log2(data),
+      data
+    )
+    return(matrix)
+  }
+
+  cents <- function(data,n){
+    matrix <- switch(
+      n,
+      MEC(data),
+      MDC(data),
+      data
+    )
+    return(matrix)
+  }
+
+  scals<- function(data,n){
+    matrix <- switch(
+      n,
+      1,
+      AUTO1(data),
+      PARETO1(data),
+      VAST1(data),
+      RANGE1(data)
+    )
+    return(matrix)
+  }
+
+  norm <- function(data,n){
+    matrix <- switch(
+      n,
+      t(fastlo(as.matrix(data))),
+      t(EIGENMS(data, label)),
+      t(LINEAR(data)),
+      t(LOWESS(data)),
+      t(SMAD(data)),
+      t(MEAN(data)),
+      t(MEDIAN(data)),
+      t(data),
+      t(PQN(data)),
+      t(QUANTILE(as.matrix(data))),
+      t(RLR1(data)),
+      t(MSTUS(data)),
+      t(TMM(data)),
+      t(VSN(as.matrix(data)))
+    )
+    return(matrix)
+  }
+
+  impute <- function(data,n){
+    matrix <- switch(
+      n,
+      filter_train_data,
+      t(back(filter_train_data)),
+      t(bpca(filter_train_data,nPcs=3)),
+      t(censor(filter_train_data)),
+      t(knn(filter_train_data,k=10)),
+      t(lls(filter_train_data,k=10)),
+      t(svdm(filter_train_data,nPcs=3)),
+      t(zero(filter_train_data))
+    )
+    return(matrix)
+  }
+
+  consistency <-  function(fold = 5, top = 20) {
+    folds <- fold
+    control.label <- control.y # variable-1
+    test.fold1 <- split(sample(1:length(control.label)), 1:folds) #ignore warning
+    case.label <- case.y # variable-2
+    test.fold2 <- split(sample(1:length(case.label)), 1:folds) #ignore warning
+
+    DEG <- list()
+    for (i in 1:folds) {
+      com.x <- cbind(control.x[, test.fold1[[i]]], case.x[, test.fold2[[i]]]) # variable-3 & 4.
+      lab.ct <- test.fold1[[i]]
+      lab.ca <- test.fold2[[i]]
+      design <- cbind(Grp1 = 1, Grp2vs1 = c(rep(0, length(lab.ct)), rep(1, length(lab.ca))))
+      fit <- limma::lmFit(com.x, design)
+      fit <- limma::eBayes(fit)
+      DEG[[i]] <- rownames(limma::topTable(fit, coef = 2, number = nrow(com.x)))
+    }
+    names(DEG) <- LETTERS[1:folds]
+
+    top.n <-top # Extracting the top n genes.
+    DEG.list <- DEG
+    for (g in 1:length(DEG.list)) {
+      DEG.list[[g]] <- DEG.list[[g]][1:top.n]
+    }
+
+    # Calculating consistency score:
+
+    setlist <- DEG.list
+    OLlist <- overLapper(setlist=setlist, sep="", type="vennsets")
+    con.score <- 0
+    VennList <- OLlist$Venn_List
+    for (i in 1:length(VennList)) {
+      insect.n <- nchar(names(VennList[i]))
+      if (insect.n < 2) next
+      num.i <- 2^(insect.n - 2) * length(VennList[[i]])
+      con.score <- con.score + num.i
+    }
+
+    return(con.score) # consistense score
+
+  }
+
+  # Stable consistense score, with 20 repeats
+
+  stabel.score <- function(repeats = 20, fold = 5, top = 10) {
+    score <- 0
+    for (r in 1:repeats) {
+      score <- score + consistency(fold, top)
+    }
+    return(score/repeats)
+  }
+
+  #####################################################################
+
+  iName<-c("BOX","LOG","NON")
+
+  oName<-c("MEC","MDC","NON")
+
+  pName<-c("NON","ATO","PAR","RAN","VAS")
+
+  jName<-c("CYC","EIG","LIN","LOW","MAD","MEA","MED","NON","PQN","QUA","RLR","TIC","TMM","VSN")
+
+  gName<-c("NON","BAK","BPC","CEN","KNN","LLS","SVD","ZER")
+
+  dataa<-data_s
+  rownames(dataa)<-dataa[,1]
+  label<- dataa[,2]
+  frame<- dataa[, -(1:2)]
+  frame<-t(frame)
+  frame<- data.frame(frame)
+  train_data<-data.matrix(frame, rownames.force = NA)
+  train_data_t<-train_data
+
+  Fpcv<-list()
+  Fscore<-list()
+  Faccuracy<-list()
+  Fpmad<-list()
+
+  Fbar1num<-list()
+  Fbaronummean<-list()
+  Fbarosd<-list()
+  Fbarorsd<-list()
+  Fbaro_rsdr_to_bar1num<-list()
+  spike<-list()
+  backgound<-list()
+  DeviationFC<-list()
+
+  time<-0
+
+  center <- c(1,2,3)
+  scaling <- c(1,2,3,4,5)
+  normalization <- c(1,2,3,4,5,6,7,8,9,10,11,12,13)
+
+  if(is.na(match("Y",assum_a))){
+    center<-3
+    scaling<-1
+  }
+
+  if(is.na(match("Y",assum_b)) & is.na(match("Y",assum_c))) {
+    normalization <- c(8)
+  }
+
+  if(is.na(match("Y",assum_b)) & !is.na(match("Y",assum_c))){
+    normalization <- c(1,2,3,4,9,10,11,13)
+  }
+
+  if(!is.na(match("Y",assum_b)) & is.na(match("Y",assum_c))){
+    normalization <- c(5,6,7,12)
+  }
+
+  newname=c()
+  for(i in 1:3){
+    if(i!=3){
+      for(o in  center){
+        for(p in  scaling){
+          for(j in normalization){
+            for(g in 1:8){
+              namebind <- paste(iName[i],oName[o],pName[p],jName[j],gName[g],sep="+")
+              newname=rbind(newname,namebind)
+            }
+          }
+        }
+      }
+    }else{
+      for(o in  3){
+        for(p in  1){
+          for(j in 14){
+            for(g in 1:8){
+              namebind <- paste(iName[i],oName[o],pName[p],jName[j],gName[g],sep="+")
+              newname=rbind(newname,namebind)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  dir.create(paste0("Criteria.A-Precision"))
+  dir.create(paste0("Criteria.B-Classification.Ability"))
+  dir.create(paste0("Criteria.C-Differential.Expression"))
+  dir.create(paste0("Criteria.D-Reproducibility"))
+  dir.create(paste0("Criteria.E-Accuracy"))
+
+  for(i in 1:3){
+
+    train_data_tran <- try(trans(train_data_t,i))
+    if(class(train_data_tran)=="try-error")
+    { next }
+
+    if(i!=3){
+
+      for(o in  center){
+
+        tran_train_data<-train_data_tran
+        tran_train_data[is.infinite(data.matrix(tran_train_data))]<-NA
+        cen_train_data<-try(cents(tran_train_data,o))
+
+        if(class(cen_train_data)=="try-error")
+        { next }
+
+        for(p in  scaling){
+
+          scal_factor<-try(scals(tran_train_data,p))
+
+          if(class(scal_factor)=="try-error")
+          { next }
+
+          scal_train_data<-cen_train_data/scal_factor
+
+          if(class(scal_train_data)=="try-error")
+          { next }
+
+          for(j in normalization){
+
+            scal_train_data[is.nan(scal_train_data)]<-NA
+            scal_train_data[is.infinite(scal_train_data)]<-NA
+            normalized_data <- try(norm(scal_train_data,j))
+
+            if(class(normalized_data)=="try-error")
+            { next }
+
+            label_c<-as.factor(label)
+            g1<-table(label_c)[levels(label_c)[1]]*0.8
+            g2<-table(label_c)[levels(label_c)[2]]*0.8
+
+            train_data_filtering<-try(Basicfilter(normalized_data,label,g1=2,g2=2))
+
+
+            if(class(train_data_filtering)=="try-error")
+            { next }
+
+            filter_train_data<-train_data_filtering
+
+            for(g in 1:8){
+
+              if(g==1){
+
+                imputed_data <- filter_train_data
+              }
+
+              if(g!=1){
+
+                imputed_data <- try(impute(filter_train_data,g))
+
+                if(class(imputed_data)=="try-error")
+                { next }
+              }
+
+              ##### count number
+              namebind11 <- paste(iName[i],oName[o],pName[p],jName[j],gName[g],sep="+")
+              id <- which(newname==namebind11, arr.ind = TRUE)
+              id <- as.data.frame(id)
+              id1 <- id$row
+              ##### Feature Selection
+              time=time+1
+              dataa<-data_s
+              frame<-imputed_data
+              label<- dataa[,2]
+
+              rots.out <-try(ROTS(data = t(frame), groups = as.character(label), B = 200, K = 500 , seed = 1234,log = FALSE))
+
+              if(class(rots.out)=="try-error")
+              { next }
+
+              frame<-imputed_data
+              label<-as.factor(as.character(label))
+              im.data<-data.frame(label=label,frame)
+
+              #(a) Precision of LFQ Based on the Proteomes among Replicates
+
+              if( Ca == 1 ){
+                #dir.create(paste0("Criteria.A-Precision"))
+                #cat(paste("Assessing" , paste(time,".",sep=""), paste(iName[i],"-",oName[o],"-",pName[p],"-", jName[j], "-",gName[g],sep=""),"Under Criteria A: Precision"),"\n")
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-",oName[o],"-",pName[p],"-", jName[j], "-",gName[g],sep=""),"Under Criteria A: Precision"),"\n")
+
+                pdf(file=paste("./Criteria.A-Precision/Criteria.A_",i,o,p,j,g,".pdf",sep=""),width = 25,height = 12,onefile = T)
+
+                data<-im.data
+                result <-PCV1(data)
+                try(plotrCV(k=2,result))
+
+                pcv<-sapply(1:3, function(i){round(1000*mean(as.numeric(result[,i])))/1000})[3]
+
+                pmad <- try(mean(PMAD(data)))
+                if(class(pmad)=="try-error")
+                { next }
+
+                Fpmad[paste(i,o,p,j,g,sep="")]<-pmad
+                dev.off()
+              }else{
+                message("'Criteria A: Precision' cannot be evaluated, Please Check!")
+              }
+
+              #(b) Classification Ability of LFQ between Distinct Sample Groups
+              if( Cb == 1 ){
+                #dir.create(paste0("Criteria.B-Classification.Ability"))
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-",oName[o],"-",pName[p],"-", jName[j], "-",gName[g],sep=""),"Under Criteria B: Classification.Ability"),"\n")
+                pdf(file=paste("./Criteria.B-Classification.Ability/Criteria.B_",i,o,p,j,g,".pdf",sep=""),width = 25,height = 12,onefile = T)
+
+                data<-im.data
+                rots.out <- rots.out
+                col_pos <- which(rots.out$FDR<0.05)
+                if(length(col_pos)<=10) {
+                  markerid<-order(rots.out$pvalue)[1:20]
+                }else {
+                  markerid <- which(rots.out$FDR<0.05)+1
+                }
+                #markerid<-which(rots.out$pvalue<0.05)+1
+                heat<-try( HeatMap(data[,c(1,markerid)], margins = c(6, 6),
+                                   dendrogram="both",main = "",
+                                   key=FALSE))
+                if(class(heat)=="try-error")
+                { next }
+                dev.off()
+
+                clusters <- hclust(dist(data[,markerid]))
+                clusterCut <- cutree(clusters, 2)
+                dataa<-data_s
+                label<- dataa[,2]
+                tmatrix<-table(clusterCut, label)
+                tru<-as.numeric(data[,1])
+                accuracy<-(tmatrix[1,1]+ tmatrix[2,2])/length(label)
+                Faccuracy[paste(i,o,p,j,g,sep="")]<-accuracy
+
+              }else{
+                message("'Criteria B: Classification.Ability' cannot be evaluated, Please Check!")
+              }
+
+              #(c) Differential Expression Analysis Based on Reproducibility-optimization
+
+              if( Cc == 1 ){
+                #dir.create(paste0("Criteria.C-Differential.Expression"))
+                cat(paste("Assessing" ,paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria C: Differential.Expression"),"\n")
+                pdf(file=paste("./Criteria.C-Differential.Expression/Criteria.C_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+
+                rots.out <- rots.out
+                try(plot(rots.out, type="pvalue"))
+                dev.off()
+
+                breaks<-seq(0,1,0.05)
+                sdres <- affy::hist(rots.out$pvalue,breaks=breaks)
+                bar1num<-sdres$counts[1]
+                baronummean<-mean(sdres$counts[-1])
+                barosd<-sd(sdres$counts[-1])
+                barorsd<-barosd/baronummean
+
+                Fbar1num[paste(i,o,p,j,g,sep="")]<-bar1num
+                Fbaronummean[paste(i,o,p,j,g,sep="")]<-baronummean
+                Fbarosd[paste(i,o,p,j,g,sep="")]<-barosd
+                Fbarorsd[paste(i,o,p,j,g,sep="")]<-barorsd
+                Fbaro_rsdr_to_bar1num[paste(i,o,p,j,g,sep="")]<-barorsd/bar1num
+
+              }else{
+                message("'Criteria C: Differential.Expression' cannot be evaluated, Please Check!")
+              }
+
+              #(d) Reproducibility of the Identified Protein Markers among Different Datasets
+              if( Cd == 1 && length(label) >= 20){
+                #dir.create(paste0("Criteria.D-Reproducibility"))
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria D: Reproducibility"),"\n")
+
+                test_data <- imputed_data
+                label.vector <- names(table(label))
+                control.x <- as.data.frame(t(test_data[label == label.vector[1], -1]))
+                case.x <- as.data.frame(t(test_data[label == label.vector[2], -1]))
+                control.y <- rep(0, table(label)[1])
+                case.y <- rep(1, table(label)[2])
+
+                score <- try(stabel.score(repeats = 200, fold = 5, top = 20))
+                pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+
+                sink(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".txt",sep=""))
+                print(score)
+                sink()
+
+                Fscore[paste(i,o,p,j,g,sep="")] <- score
+
+                fold = 5
+                top = 20
+                folds <- fold
+                control.label <- control.y # variable-1
+                test.fold1 <- split(sample(1:length(control.label)), 1:folds) #ignore warning
+                case.label <- case.y # variable-2
+                test.fold2 <- split(sample(1:length(case.label)), 1:folds) #ignore warning
+
+                DEG <- list()
+                for (i in 1:folds) {
+                  com.x <- cbind(control.x[, test.fold1[[i]]], case.x[, test.fold2[[i]]]) # variable-3 & 4.
+                  lab.ct <- test.fold1[[i]]
+                  lab.ca <- test.fold2[[i]]
+                  design <- cbind(Grp1 = 1, Grp2vs1 = c(rep(0, length(lab.ct)), rep(1, length(lab.ca))))
+                  fit <- lmFit(com.x, design)
+                  fit <- eBayes(fit)
+                  DEG[[i]] <- rownames(topTable(fit, coef = 2, number = nrow(com.x)))
+                }
+                names(DEG) <- LETTERS[1:folds]
+
+                top.n <-top # Extracting the top n genes.
+                DEG.list <- DEG
+                for (g in 1:length(DEG.list)) {
+                  DEG.list[[g]] <- DEG.list[[g]][1:top.n]
+                }
+
+                #setwd(tempdir())
+                DEG3.list <- DEG.list
+                #save(DEG3.list, file = "DEG3.list.RData")
+                cols <- rainbow(length(DEG.list))
+
+                if (length(DEG.list) == 3) {
+
+                  setlist3 <- DEG.list;
+                  #OLlist3 <- overLapper(setlist = setlist3, sep="_", type = "vennsets")
+                  #counts <- list(sapply(OLlist3$Venn_List, length), sapply(OLlist3$Venn_List, length))
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts = counts[[1]], yoffset = c(0.3, -0.2))
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+                  try(grid::grid.draw(venn.plot))
+
+
+                } else if (length(DEG.list) == 4) {
+
+                  setlist4 <- DEG.list
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+
+                  #pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+                  try(grid::grid.draw(venn.plot))
+                  #dev.off()
+                  #OLlist4 <- overLapper(setlist=setlist4, sep="_", type="vennsets")
+                  #counts <- list(sapply(OLlist4$Venn_List, length), sapply(OLlist4$Venn_List, length))
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts=counts[[1]], yoffset=c(0.3, -0.2))
+
+                } else {
+
+                  setlist5 <- DEG.list
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+
+                  #pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+                  try(grid::grid.draw(venn.plot))
+
+                  #OLlist5 <- overLapper(setlist=setlist5, sep="_", type="vennsets")
+                  #counts <- sapply(OLlist5$Venn_List, length)
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts=counts, ccol=c(rep(1,30),2), lcex=1.5, ccex=c(rep(1.5,5), rep(0.6,25),1.5)) # Plots a non-proportional 5-way Venn diagram.
+
+                }
+                dev.off()
+
+              }else{
+                message("'Criteria.D-Reproducibility' cannot be evaluated, Please Check!")
+              }
+              if( Ce == 1 ){
+                #dir.create(paste0("Criteria.E-Accuracy"))
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria E: Accuracy"),"\n")
+
+                #gettrueM2_1 <- spiked
+
+                if(length(grep(".csv", spiked))==1){
+
+                  gettrueM2_1 <- read.csv(spiked, header = TRUE, row.names = 1)
+
+                }else if(length(grep(".txt", spiked))==1){
+
+                  gettrueM2_1 <- read.csv(spiked, sep="\t", header = TRUE, row.names = 1)
+
+                }else{
+                  stop("Please input correct file format!")
+                }
+
+                if(length(intersect(colnames(gettrueM2_1), colnames(data_s)))<2){
+                  stop("Criteria E cannot performed, due to without matched  spiked protein :\n")
+                }
+
+                label1<- gettrueM2_1[,1]
+                spikeddata<-gettrueM2_1[,-1]
+
+                data0<-im.data
+                if( i == 2 | j == 13){
+                  data0<-data0
+                }else{
+                  data0<-Log2Transform(data0)$output
+                }
+
+                fc0 <- try(FoldChange(data0, paired = FALSE, plot.hist = FALSE)[,2])
+
+
+                if(class(fc0)=="try-error")
+                { next }
+
+                data1<-gettrueM2_1
+                data1<-Log2Transform(data1)$output
+                fc1 <- FoldChange(data1, paired = FALSE, plot.hist = FALSE)[,2]
+
+                SpikeID<-match(colnames(spikeddata),names(fc0))
+                if(all(is.na(SpikeID))){
+                  message("Criteria E cannot performed, due to without matched spiked protein :\n")
+                  { next }
+                }
+                SpikeID<-na.omit(SpikeID)
+                EestimatedFC<-try(fc0[SpikeID])
+                if(class(EestimatedFC)=="try-error")
+                { next }
+
+                ExpectedFC<-fc1
+                DifferFC<-EestimatedFC-ExpectedFC
+                result_spike<-cbind("ExpectedFC logFCs"= ExpectedFC,"Quantification logFCs"= EestimatedFC,"Deviation" = DifferFC)
+
+                backgound_protein<-fc0[-SpikeID]
+
+                backgound[[paste(i,o,p,j,g,sep="")]]<-median(backgound_protein,na.rm=TRUE)
+
+                DeviationFC[paste(i,o,p,j,g,sep="")]<-median(DifferFC,na.rm=TRUE)
+
+                pdf(file=paste("./Criteria.E-Accuracy/Criteria.E_",i,o,p,j,g,".pdf",sep=""),width = 13,height = 12)
+                boxp <- try(boxplot(DifferFC,na.rm=TRUE,col="#F05C3B"))
+                dev.off()
+
+                if(class(boxp)=="try-error")
+                { next }
+
+              }
+
+            }
+
+          }
+
+        }
+      }
+
+    }else{
+
+      for(o in  3){
+
+        tran_train_data<-train_data_tran
+        tran_train_data[is.infinite(data.matrix(tran_train_data))]<-NA
+        cen_train_data<-try(cents(tran_train_data,o))
+
+        if(class(cen_train_data)=="try-error")
+        { next }
+
+        for(p in  1){
+
+          scal_factor<-try(scals(tran_train_data,p))
+
+          if(class(scal_factor)=="try-error")
+          { next }
+
+          scal_train_data<-cen_train_data/scal_factor
+
+          if(class(scal_train_data)=="try-error")
+          { next }
+
+          for(j in 14){
+
+            scal_train_data[is.nan(scal_train_data)]<-NA
+            scal_train_data[is.infinite(scal_train_data)]<-NA
+            normalized_data <- try(norm(scal_train_data,j))
+
+            if(class(normalized_data)=="try-error")
+            { next }
+
+            label_c<-as.factor(label)
+            g1<-table(label_c)[levels(label_c)[1]]*0.8
+            g2<-table(label_c)[levels(label_c)[2]]*0.8
+
+            train_data_filtering<-try(Basicfilter(normalized_data,label,g1=2,g2=2))
+
+            if(class(train_data_filtering)=="try-error")
+            { next }
+
+            filter_train_data<-train_data_filtering
+
+            for(g in 1:8){
+
+              if(g==1){
+
+                imputed_data <- filter_train_data
+              }
+
+              if(g!=1){
+
+                imputed_data <- try(impute(filter_train_data,g))
+
+                if(class(imputed_data)=="try-error")
+                { next }
+              }
+              ##### count number
+              namebind11 <- paste(iName[i],oName[o],pName[p],jName[j],gName[g],sep="+")
+              id <- which(newname==namebind11, arr.ind = TRUE)
+              id <- as.data.frame(id)
+              id1 <- id$row
+              ##### Feature Selection
+              time=time+1
+              dataa<-data_s
+              frame<-imputed_data
+              label<- dataa[,2]
+
+              rots.out <-try(ROTS(data = t(frame), groups = as.character(label), B = 200, K = 500 , seed = 1234,log = FALSE))
+
+              if(class(rots.out)=="try-error")
+              { next }
+
+              frame<-imputed_data
+              label<-as.factor(as.character(label))
+              im.data<-data.frame(label=label,frame)
+
+              #(a) Precision of LFQ Based on the Proteomes among Replicates
+
+              if( Ca == 1 ){
+                #dir.create(paste0("Criteria.A-Precision"))
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-",oName[o],"-",pName[p],"-", jName[j], "-",gName[g],sep=""),"Under Criteria A: Precision"),"\n")
+                pdf(file=paste("./Criteria.A-Precision/Criteria.A_",i,o,p,j,g,".pdf",sep=""),width = 25,height = 12,onefile = T)
+
+                data<-im.data
+                result <-PCV1(data)
+                try(plotrCV(k=2,result))
+                pcv<-sapply(1:3, function(i){round(1000*mean(as.numeric(result[,i])))/1000})[3]
+
+                pmad <- try(mean(PMAD(data)))
+                if(class(pmad)=="try-error")
+                { next }
+
+                Fpmad[paste(i,o,p,j,g,sep="")]<-pmad
+                dev.off()
+              }else{
+                message("'Criteria A: Precision' cannot be evaluated, Please Check!")
+              }
+
+              #(b) Classification Ability of LFQ between Distinct Sample Groups
+              if( Cb == 1 ){
+
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-",oName[o],"-",pName[p],"-", jName[j], "-",gName[g],sep=""),"Under Criteria B: Classification.Ability"),"\n")
+
+                data<-im.data
+                rots.out <- rots.out
+                col_pos <- which(rots.out$FDR<0.05)
+                if(length(col_pos)<=10) {
+                  markerid<-order(rots.out$pvalue)[1:20]
+                }else {
+                  markerid <- which(rots.out$FDR<0.05)+1
+                }
+                #markerid<-which(rots.out$pvalue<0.05)+1
+                heat<-try( HeatMap(data[,c(1,markerid)], margins = c(6, 6),
+                                   dendrogram="both",main = "",
+                                   key=FALSE))
+                if(class(heat)=="try-error")
+                { next }
+                dev.off()
+
+                clusters <- hclust(dist(data[,markerid]))
+                clusterCut <- cutree(clusters, 2)
+                dataa<-data_s
+                label<- dataa[,2]
+                tmatrix<-table(clusterCut, label)
+                tru<-as.numeric(data[,1])
+                accuracy<-(tmatrix[1,1]+ tmatrix[2,2])/length(label)
+                Faccuracy[paste(i,o,p,j,g,sep="")]<-accuracy
+
+              }else{
+                message("'Criteria B: Classification.Ability' cannot be evaluated, Please Check!")
+              }
+
+              #(c) Differential Expression Analysis Based on Reproducibility-optimization
+
+              if( Cc == 1 ){
+                #dir.create(paste0("Criteria.C-Differential.Expression"))
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria C: Differential.Expression"),"\n")
+                pdf(file=paste("./Criteria.C-Differential.Expression/Criteria.C_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+
+                rots.out <- rots.out
+                try(plot(rots.out, type="pvalue"))
+                dev.off()
+
+                breaks<-seq(0,1,0.05)
+                sdres <- affy::hist(rots.out$pvalue,breaks=breaks)
+                bar1num <- sdres$counts[1]
+                baronummean<-mean(sdres$counts[-1])
+                barosd<-sd(sdres$counts[-1])
+                barorsd<-barosd/baronummean
+
+                Fbar1num[paste(i,o,p,j,g,sep="")]<-bar1num
+                Fbaronummean[paste(i,o,p,j,g,sep="")]<-baronummean
+                Fbarosd[paste(i,o,p,j,g,sep="")]<-barosd
+                Fbarorsd[paste(i,o,p,j,g,sep="")]<-barorsd
+                Fbaro_rsdr_to_bar1num[paste(i,o,p,j,g,sep="")]<-barorsd/bar1num
+
+              }else{
+                message("'Criteria C: Differential.Expression' cannot be evaluated, Please Check!")
+              }
+
+              #(d) Reproducibility of the Identified Protein Markers among Different Datasets
+              if( Cd == 1 && length(label) >= 20){
+
+                #dir.create(paste0("Criteria.D-Reproducibility"))
+
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria D: Reproducibility"),"\n")
+
+                test_data <- imputed_data
+                label.vector <- names(table(label))
+                control.x <- as.data.frame(t(test_data[label == label.vector[1], -1]))
+                case.x <- as.data.frame(t(test_data[label == label.vector[2], -1]))
+                control.y <- rep(0, table(label)[1])
+                case.y <- rep(1, table(label)[2])
+
+                score <- try(stabel.score(repeats = 200, fold = 5, top = 20))
+
+                pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+
+                sink(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".txt",sep=""))
+                print(score)
+                sink()
+
+                Fscore[paste(i,o,p,j,g,sep="")] <- score
+
+                fold = 5
+                top = 20
+                folds <- fold
+                control.label <- control.y # variable-1
+                test.fold1 <- split(sample(1:length(control.label)), 1:folds) #ignore warning
+                case.label <- case.y # variable-2
+                test.fold2 <- split(sample(1:length(case.label)), 1:folds) #ignore warning
+
+                DEG <- list()
+                for (i in 1:folds) {
+                  com.x <- cbind(control.x[, test.fold1[[i]]], case.x[, test.fold2[[i]]]) # variable-3 & 4.
+                  lab.ct <- test.fold1[[i]]
+                  lab.ca <- test.fold2[[i]]
+                  design <- cbind(Grp1 = 1, Grp2vs1 = c(rep(0, length(lab.ct)), rep(1, length(lab.ca))))
+                  fit <- lmFit(com.x, design)
+                  fit <- eBayes(fit)
+                  DEG[[i]] <- rownames(topTable(fit, coef = 2, number = nrow(com.x)))
+                }
+                names(DEG) <- LETTERS[1:folds]
+
+                top.n <-top # Extracting the top n genes.
+                DEG.list <- DEG
+                for (g in 1:length(DEG.list)) {
+                  DEG.list[[g]] <- DEG.list[[g]][1:top.n]
+                }
+
+                #setwd(tempdir())
+                DEG3.list <- DEG.list
+                #save(DEG3.list, file = "DEG3.list.RData")
+                cols <- rainbow(length(DEG.list))
+                if (length(DEG.list) == 3) {
+
+                  setlist3 <- DEG.list;
+                  #OLlist3 <- overLapper(setlist = setlist3, sep="_", type = "vennsets")
+                  #counts <- list(sapply(OLlist3$Venn_List, length), sapply(OLlist3$Venn_List, length))
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts = counts[[1]], yoffset = c(0.3, -0.2))
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+                  try(grid::grid.draw(venn.plot))
+
+
+                } else if (length(DEG.list) == 4) {
+
+                  setlist4 <- DEG.list
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+
+                  #pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+                  try(grid::grid.draw(venn.plot))
+                  #dev.off()
+                  #OLlist4 <- overLapper(setlist=setlist4, sep="_", type="vennsets")
+                  #counts <- list(sapply(OLlist4$Venn_List, length), sapply(OLlist4$Venn_List, length))
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts=counts[[1]], yoffset=c(0.3, -0.2))
+
+                } else {
+
+                  setlist5 <- DEG.list
+                  futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+                  venn.plot <- try(VennDiagram::venn.diagram(x = DEG.list, filename = NULL, col=cols))
+
+                  #pdf(file=paste("./Criteria.D-Reproducibility/Criteria.D_",i,o,p,j,g,".pdf",sep=""),width = 22,height = 12,onefile = T)
+                  try(grid::grid.draw(venn.plot))
+
+                  #OLlist5 <- overLapper(setlist=setlist5, sep="_", type="vennsets")
+                  #counts <- sapply(OLlist5$Venn_List, length)
+                  #par(mar=c(2,2,3,0.2))
+                  #vennPlot(counts=counts, ccol=c(rep(1,30),2), lcex=1.5, ccex=c(rep(1.5,5), rep(0.6,25),1.5)) # Plots a non-proportional 5-way Venn diagram.
+
+                }
+                dev.off()
+
+              }else{
+                message("'Criteria.D-Reproducibility' cannot be evaluated, Please Check!")
+              }
+
+              if( Ce == 1 ){
+
+
+                cat(paste("Assessing" , paste(id1,"/",length(newname),":",sep=""), paste(iName[i],"-", oName[o],"-",pName[p],"-",jName[j], "-",gName[g],sep=""),"Under Criteria E: Accuracy"),"\n")
+
+                #gettrueM2_1 <- spiked
+
+                if(length(grep(".csv", spiked))==1){
+
+                  gettrueM2_1 <- read.csv(spiked, header = TRUE, row.names = 1)
+
+                }else if(length(grep(".txt", spiked))==1){
+
+                  gettrueM2_1 <- read.csv(spiked, sep="\t", header = TRUE, row.names = 1)
+
+                }else{
+                  stop("Please input correct file format!")
+                }
+
+                if(length(intersect(colnames(gettrueM2_1),colnames(data_s)))<2){
+                  stop("Criteria E cannot performed, due to without matched  spiked protein :\n")
+                }
+
+                label1<- gettrueM2_1[,1]
+                spikeddata<-gettrueM2_1[,-1]
+
+                data0<-im.data
+                if( i == 2 | j == 13){
+                  data0<-data0
+                }else{
+                  data0<-Log2Transform(data0)$output
+                }
+
+                fc0 <- try(FoldChange(data0, paired = FALSE, plot.hist = FALSE)[,2])
+
+
+                if(class(fc0)=="try-error")
+                { next }
+
+                data1<-gettrueM2_1
+                data1<-Log2Transform(data1)$output
+                fc1 <- FoldChange(data1, paired = FALSE, plot.hist = FALSE)[,2]
+
+                SpikeID<-match(colnames(spikeddata),names(fc0))
+                if(all(is.na(SpikeID))){
+                  message("Criteria E cannot performed, due to without matched spiked protein :\n")
+                  { next }
+                }
+                SpikeID<-na.omit(SpikeID)
+                EestimatedFC<-try(fc0[SpikeID])
+                if(class(EestimatedFC)=="try-error")
+                { next }
+
+                ExpectedFC<-fc1
+                DifferFC<-EestimatedFC-ExpectedFC
+                result_spike<-cbind("ExpectedFC logFCs"= ExpectedFC,"Quantification logFCs"= EestimatedFC,"Deviation" = DifferFC)
+
+                backgound_protein<-fc0[-SpikeID]
+                backgound[[paste(i,o,p,j,g,sep="")]]<-median(backgound_protein,na.rm=TRUE)
+                DeviationFC[paste(i,o,p,j,g,sep="")]<-median(DifferFC,na.rm=TRUE)
+
+                pdf(file=paste("./Criteria.E-Accuracy/Criteria.E_",i,o,p,j,g,".pdf",sep=""),width = 13,height = 12)
+                boxp <- try(boxplot(DifferFC,na.rm=TRUE,col="#F05C3B"))
+                dev.off()
+
+                if(class(boxp)=="try-error")
+                { next }
+
+              }
+
+            }
+          }
+        }
+      }
+    }
+  }
+
+  save(Fpmad,file="./Criteria.A-Precision.Rdata")
+  save(Faccuracy,file="./Criteria.B-Classification.Ability.Rdata")
+  save(Fbaro_rsdr_to_bar1num,file="./Criteria.C-Differential.Expression.Rdata")
+  save(Fscore,file="./Criteria.D-Reproducibility.Rdata")
+  save(backgound,file="./Criteria.E-Accuracy.Rdata")
+  save(DeviationFC,file="./Criteria.E-Accuracyd.Rdata")
+  #############################################
+  if(!is.null(unlist(Faccuracy))){
+    Acc_revison<-unlist(Faccuracy)
+    Acc_revison_ID<-which(Acc_revison<0.5)
+    Acc_revison[Acc_revison_ID]<-1-Acc_revison[Acc_revison_ID]
+  }
+
+  if(!is.null(unlist(backgound))){
+    DeviationFC__revison<-abs(unlist(backgound))
+  }
+  if(!is.null(unlist(DeviationFC))){
+    DeviationFC__revisonaa<-abs(unlist(DeviationFC))
+  }
+
+  result<-dplyr::bind_rows("Precision"=unlist(Fpmad),"Classification.Ability"=Acc_revison,"Differential.Expression"=unlist(Fbaro_rsdr_to_bar1num),"Reproducibility"=unlist(Fscore),"backAccuracy"=unlist(DeviationFC__revison),"Accuracy"=unlist(DeviationFC__revisonaa), .id = "id")
+  result1<-t(result)
+  colnames(result1)<-result1["id",]
+  result2<-result1[-1,]
+  result2<-data.frame(result2,check.names=FALSE)
+  rownames(result2)<-names[match(rownames(result2),names[,1]),2]
+  Rank<-apply(result2, 2, function(x){rank(as.numeric(as.character(x)),ties.method="min",na.last = "keep")})
+  rownames(Rank)<-rownames(result2)
+
+  if(length(grep("Reproducibility",colnames(Rank)))==1){
+    Rank[,"Reproducibility"]<-rank(-as.numeric(as.character(result2[,"Reproducibility"])),ties.method="min",na.last = "keep")
+  }else{
+    Rank<-Rank
+  }
+
+  if(length(grep("Classification.Ability",colnames(Rank)))==1){
+    Rank[,"Classification.Ability"]<- rank(-as.numeric(as.character(result2[,"Classification.Ability"])),ties.method="min",na.last = "keep")
+  }else{
+    Rank<-Rank
+  }
+
+  Rank_revision<-apply(Rank, 2, function(x){x[is.na(x)]<-nrow(Rank);return(x)})
+
+  Ranksum0<-apply(Rank_revision, 1, sum)
+  Rankres0<-cbind("OverallRank"=Ranksum0,Rank_revision)
+
+  zuihou0<-cbind("Rank"=Rankres0,"Value"=result2)
+
+  if(length(grep("Precision",colnames(result2)))==1){
+    ID<-which(as.numeric(as.character(result2[,"Precision"]))>0.7)
+    AA<-zuihou0[-ID,]
+    AA0<-AA[order(AA[,1],decreasing = FALSE),]
+    AA0[,1]<-rank(AA0[,1],ties.method="min")
+    BB<-zuihou0[ID,]
+    BB0<-BB[order(BB[,1],decreasing = FALSE),]
+    BB0[,1]<-rank(BB0[,1],ties.method="min")+max(AA0[,1])
+    zuihou2<-rbind(AA0,BB0)
+  }else{
+    zuihou1<-zuihou0[order(Rankres0[,"OverallRank"],decreasing = FALSE),]
+    zuihou1[,1]<-rank(zuihou1[,1],ties.method="min")
+    zuihou2<-zuihou1
+  }
+  write.csv(zuihou2,file = "./EVALFQ-OUTPUT.Data-Overall.Ranking.csv")
+  cat("\n")
+  cat("*************************************************************************","\n")
+  cat("Congratulations! Assessment Successfully Completed!","\n")
+  cat("Thanks for Using EVALFQ. Wish to See You Soon ...","\n")
+  cat("*************************************************************************","\n")
+  cat("\n")
+  #return(zuihou2)
+  ###############################################End##########################################################################
+}
+
