@@ -188,10 +188,6 @@ Based on these independent criteria shown above, EVALFQ enabled the performance 
 [![](https://img.shields.io/badge/source%20package-EVALFQ--0.1.0.tar.gz-orange.svg)](https://github.com/idrblab/EVALFQ/releases/download/EVALFQ.0.1.0/EVALFQ.0.1.0.tar.gz)
 
 ```R
-# To install the package, type this command in R:
-install.packages("devtools")
-devtools::install_github("idrblab/EVALFQ")
-
 # EVALFQ package depends on several packages, which can be installed using the below commands:
 if (!requireNamespace("BiocManager", quietly = TRUE))
 install.packages("BiocManager")
@@ -205,6 +201,10 @@ BiocManager::install("pcaMethods")
 BiocManager::install("vsn")
 BiocManager::install("affy")
 devtools::install_github("cran/metabolomics")
+
+# To install the package, type this command in R:
+install.packages("devtools")
+devtools::install_github("idrblab/EVALFQ")
 
 # Or download the source package of EVALFQ_0.1.0.tar.gz and install it
 install.packages("EVALFQ.0.1.0.tar.gz", repos = NULL, type = "source", INSTALL_opts = "--no-multiarch")
